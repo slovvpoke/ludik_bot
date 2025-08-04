@@ -32,6 +32,8 @@ db = client.twitch_giveaway
 
 # Collections
 participants_collection = db.participants
+# Ensure unique participant per giveaway and username combination
+participants_collection.create_index([("giveaway_id", 1), ("username", 1)], unique=True)
 giveaways_collection = db.giveaways
 chat_messages_collection = db.chat_messages
 
@@ -160,11 +162,13 @@ async def process_chat_message(chat_msg: TwitchChatMessage):
         
         giveaway_id = giveaway["id"]
         is_keyword_message = chat_msg.keyword.lower() in chat_msg.message.lower()
-        
+
+        username = chat_msg.username.lower()
+
         # Save chat message
         chat_message = {
             "id": str(uuid.uuid4()),
-            "username": chat_msg.username,
+            "username": username,
             "message": chat_msg.message,
             "timestamp": datetime.now().isoformat(),
             "is_keyword": is_keyword_message,
@@ -178,17 +182,17 @@ async def process_chat_message(chat_msg: TwitchChatMessage):
         if is_keyword_message:
             existing = participants_collection.find_one({
                 "giveaway_id": giveaway_id,
-                "username": chat_msg.username
+                "username": username
             })
-            
+
             if not existing:
                 participant = {
                     "id": str(uuid.uuid4()),
-                    "username": chat_msg.username,
+                    "username": username,
                     "joined_at": datetime.now().isoformat(),
                     "giveaway_id": giveaway_id
                 }
-                
+
                 participants_collection.insert_one(participant)
                 
                 # Update count
@@ -197,7 +201,7 @@ async def process_chat_message(chat_msg: TwitchChatMessage):
                     {"$inc": {"participants_count": 1}}
                 )
                 
-                logger.info(f"Added participant: {chat_msg.username} to giveaway {giveaway_id}")
+                logger.info(f"Added participant: {username} to giveaway {giveaway_id}")
                 return {"message": "Participant added", "is_participant": True}
         
         return {"message": "Message processed", "is_participant": False}
