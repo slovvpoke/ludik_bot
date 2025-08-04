@@ -77,6 +77,7 @@ class TwitchGiveawayAPITester:
         """Test creating a new giveaway"""
         giveaway_data = {
             "stream_url": "https://twitch.tv/test_channel",
+            "channel_name": "test_channel",
             "keyword": "!участвую"
         }
         
