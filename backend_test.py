@@ -260,11 +260,13 @@ def main():
         ("Clear All Data", tester.test_clear_all_data),
         ("Create Giveaway", tester.test_create_giveaway),
         ("Get Active Giveaway", tester.test_get_active_giveaway),
-        ("Simulate Chat Messages", tester.test_simulate_chat_messages),
+        ("Process Chat Message", tester.test_process_chat_message),
+        ("Process Regular Message", tester.test_process_regular_message),
         ("Get Chat Messages", tester.test_get_chat_messages),
         ("Get Participants", tester.test_get_participants),
-        ("Add Participant Manually", tester.test_add_participant_manually),
+        ("Channel Stats", tester.test_channel_stats),
         ("Select Winner", tester.test_select_winner),
+        ("Clear Participants", tester.test_clear_participants),
         ("Stop Giveaway", tester.test_stop_giveaway),
     ]
     
