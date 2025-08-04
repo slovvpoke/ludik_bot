@@ -26,9 +26,9 @@ function App() {
       // Поддерживаем различные форматы URL
       const patterns = [
         /twitch\.tv\/(\w+)$/,
-        /twitch\.tv\/(\w+)\/?,
+        /twitch\.tv\/(\w+)\/?$/,
         /www\.twitch\.tv\/(\w+)$/,
-        /www\.twitch\.tv\/(\w+)\/?/,
+        /www\.twitch\.tv\/(\w+)\/?$/,
       ];
       
       for (const pattern of patterns) {
