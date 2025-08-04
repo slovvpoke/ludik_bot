@@ -105,24 +105,49 @@ class TwitchGiveawayAPITester:
         )
         return success
 
-    def test_simulate_chat_messages(self):
-        """Test simulating chat messages"""
-        print(f"\n🔍 Testing Chat Simulation (5 messages)...")
-        success_count = 0
+    def test_process_chat_message(self):
+        """Test processing a chat message with keyword"""
+        if not self.giveaway_id:
+            print("❌ No giveaway ID available for chat message test")
+            return False
+            
+        chat_data = {
+            "username": "TestUser123",
+            "message": "!участвую Хочу выиграть!",
+            "channel": "test_channel",
+            "keyword": "!участвую"
+        }
         
-        for i in range(5):
-            success, response = self.run_test(
-                f"Simulate Chat Message {i+1}",
-                "POST",
-                "api/simulate/chat",
-                200
-            )
-            if success:
-                success_count += 1
-            time.sleep(0.5)  # Small delay between messages
+        success, response = self.run_test(
+            "Process Chat Message",
+            "POST",
+            "api/chat/message",
+            200,
+            data=chat_data
+        )
+        return success
+
+    def test_process_regular_message(self):
+        """Test processing a regular chat message without keyword"""
+        if not self.giveaway_id:
+            print("❌ No giveaway ID available for regular message test")
+            return False
+            
+        chat_data = {
+            "username": "RegularUser",
+            "message": "Привет всем!",
+            "channel": "test_channel", 
+            "keyword": "!участвую"
+        }
         
-        print(f"   Successfully simulated {success_count}/5 chat messages")
-        return success_count >= 3  # Consider success if at least 3 messages worked
+        success, response = self.run_test(
+            "Process Regular Message",
+            "POST",
+            "api/chat/message",
+            200,
+            data=chat_data
+        )
+        return success
 
     def test_get_chat_messages(self):
         """Test getting chat messages"""
