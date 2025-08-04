@@ -319,10 +319,28 @@ function App() {
     setIsFlippingCoin(true);
     const result = Math.random() < 0.5 ? 'heads' : 'tails';
     
+    // Добавляем звуковой эффект в чат
+    setChatMessages(prev => [...prev, {
+      id: 'coin-' + Date.now(),
+      username: 'ЛУДИК БОТ',
+      message: `🪙 Подбрасываю монетку... *звук вращения*`,
+      timestamp: new Date().toLocaleTimeString(),
+      isSystem: true
+    }]);
+    
     setTimeout(() => {
       setCoinResult(result);
       setIsFlippingCoin(false);
       setShowCoinAnimation(true);
+      
+      // Результат в чат
+      setChatMessages(prev => [...prev, {
+        id: 'coin-result-' + Date.now(),
+        username: 'ЛУДИК БОТ',
+        message: `🎯 Монетка упала: ${result === 'heads' ? '👑 ОРЁЛ' : '🕊️ РЕШКА'}!`,
+        timestamp: new Date().toLocaleTimeString(),
+        isSystem: true
+      }]);
       
       setTimeout(() => {
         setShowCoinAnimation(false);
