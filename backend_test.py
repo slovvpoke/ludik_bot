@@ -208,14 +208,21 @@ class TwitchGiveawayAPITester:
             print("❌ No giveaway ID available for select winner test")
             return False
             
-        # First, let's make sure we have some participants by simulating more chat
+        # First, let's make sure we have some participants by processing chat messages
         print("   Ensuring we have participants...")
         for i in range(3):
+            chat_data = {
+                "username": f"Participant{i+1}",
+                "message": "!участвую",
+                "channel": "test_channel",
+                "keyword": "!участвую"
+            }
             self.run_test(
-                f"Extra Chat Message {i+1}",
+                f"Add Participant {i+1}",
                 "POST",
-                "api/simulate/chat",
-                200
+                "api/chat/message",
+                200,
+                data=chat_data
             )
             time.sleep(0.3)
         
