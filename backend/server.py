@@ -6,15 +6,15 @@ import os
 import logging
 from datetime import datetime
 import random
-import asyncio
 import uuid
 from pymongo import MongoClient
+import re
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Twitch Giveaway API", version="1.0.0")
+app = FastAPI(title="Twitch Giveaway API", version="2.0.0")
 
 # CORS middleware
 app.add_middleware(
@@ -43,6 +43,7 @@ class ChatMessage(BaseModel):
     timestamp: str
     is_keyword: bool = False
     is_system: bool = False
+    giveaway_id: Optional[str] = None
 
 class Participant(BaseModel):
     id: str = None
@@ -53,6 +54,7 @@ class Participant(BaseModel):
 class Giveaway(BaseModel):
     id: str = None
     stream_url: str
+    channel_name: str
     keyword: str
     is_active: bool
     created_at: str
@@ -61,24 +63,38 @@ class Giveaway(BaseModel):
 
 class GiveawayCreate(BaseModel):
     stream_url: str
+    channel_name: str
     keyword: str
 
-class WinnerSelect(BaseModel):
-    giveaway_id: str
+class TwitchChatMessage(BaseModel):
+    username: str
+    message: str
+    channel: str
+    keyword: str
 
-# Demo data for simulation
-DEMO_USERS = [
-    'StreamFan123', 'GamerPro', 'TwitchLover', 'ChatMaster', 'ViewerOne',
-    'KappaPride', 'EpicGamer', 'StreamSniper', 'ChatBot2023', 'ProViewer',
-    'TwitchNinja', 'StreamKing', 'ViewerMaster', 'ChatLegend', 'GameOn',
-    'StreamHero', 'TwitchStar', 'ViewerPro', 'ChatChampion', 'StreamFan'
-]
-
-DEMO_MESSAGES = [
-    'Привет стрим!', 'Классная игра!', 'Первый!', 'Как дела?', 
-    'Крутой контент!', 'Удачи в игре!', 'Смотрю каждый день!',
-    'Лучший стример!', 'Интересно!', 'Продолжай в том же духе!'
-]
+def extract_channel_name(url: str) -> Optional[str]:
+    """Extract channel name from Twitch URL"""
+    try:
+        patterns = [
+            r'twitch\.tv\/(\w+)$',
+            r'twitch\.tv\/(\w+)\/?',
+            r'www\.twitch\.tv\/(\w+)$',
+            r'www\.twitch\.tv\/(\w+)\/?',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1).lower()
+        
+        # If it's just a channel name
+        if re.match(r'^\w+$', url):
+            return url.lower()
+        
+        return None
+    except Exception as e:
+        logger.error(f"Error extracting channel name: {e}")
+        return None
 
 # Health check
 @app.get("/api/health")
@@ -90,9 +106,16 @@ async def health_check():
 async def create_giveaway(giveaway_data: GiveawayCreate):
     try:
         giveaway_id = str(uuid.uuid4())
+        
+        # Extract channel name if URL provided
+        channel_name = extract_channel_name(giveaway_data.stream_url)
+        if not channel_name:
+            channel_name = giveaway_data.channel_name or "unknown"
+        
         giveaway = {
             "id": giveaway_id,
             "stream_url": giveaway_data.stream_url,
+            "channel_name": channel_name,
             "keyword": giveaway_data.keyword,
             "is_active": True,
             "created_at": datetime.now().isoformat(),
@@ -102,18 +125,7 @@ async def create_giveaway(giveaway_data: GiveawayCreate):
         
         giveaways_collection.insert_one(giveaway)
         
-        # Add system message
-        system_msg = {
-            "id": str(uuid.uuid4()),
-            "username": "TwitchBot",
-            "message": f"🎉 Розыгрыш начался! Пишите \"{giveaway_data.keyword}\" для участия!",
-            "timestamp": datetime.now().isoformat(),
-            "is_keyword": False,
-            "is_system": True,
-            "giveaway_id": giveaway_id
-        }
-        chat_messages_collection.insert_one(system_msg)
-        
+        logger.info(f"Created giveaway for channel: {channel_name}")
         return Giveaway(**giveaway)
     except Exception as e:
         logger.error(f"Error creating giveaway: {e}")
@@ -127,29 +139,72 @@ async def get_active_giveaway():
         if not giveaway:
             return None
         
-        # Convert ObjectId to string
         giveaway["_id"] = str(giveaway["_id"])
         return giveaway
     except Exception as e:
         logger.error(f"Error getting active giveaway: {e}")
         raise HTTPException(status_code=500, detail="Failed to get active giveaway")
 
-# Stop giveaway
-@app.post("/api/giveaway/{giveaway_id}/stop")
-async def stop_giveaway(giveaway_id: str):
+# Process Twitch chat message
+@app.post("/api/chat/message")
+async def process_chat_message(chat_msg: TwitchChatMessage):
     try:
-        result = giveaways_collection.update_one(
-            {"id": giveaway_id},
-            {"$set": {"is_active": False}}
-        )
+        # Find active giveaway for this channel
+        giveaway = giveaways_collection.find_one({
+            "channel_name": chat_msg.channel.lower(),
+            "is_active": True
+        })
         
-        if result.matched_count == 0:
-            raise HTTPException(status_code=404, detail="Giveaway not found")
+        if not giveaway:
+            return {"message": "No active giveaway for this channel"}
+        
+        giveaway_id = giveaway["id"]
+        is_keyword_message = chat_msg.keyword.lower() in chat_msg.message.lower()
+        
+        # Save chat message
+        chat_message = {
+            "id": str(uuid.uuid4()),
+            "username": chat_msg.username,
+            "message": chat_msg.message,
+            "timestamp": datetime.now().isoformat(),
+            "is_keyword": is_keyword_message,
+            "is_system": False,
+            "giveaway_id": giveaway_id
+        }
+        
+        chat_messages_collection.insert_one(chat_message)
+        
+        # Add participant if keyword message
+        if is_keyword_message:
+            existing = participants_collection.find_one({
+                "giveaway_id": giveaway_id,
+                "username": chat_msg.username
+            })
             
-        return {"message": "Giveaway stopped"}
+            if not existing:
+                participant = {
+                    "id": str(uuid.uuid4()),
+                    "username": chat_msg.username,
+                    "joined_at": datetime.now().isoformat(),
+                    "giveaway_id": giveaway_id
+                }
+                
+                participants_collection.insert_one(participant)
+                
+                # Update count
+                giveaways_collection.update_one(
+                    {"id": giveaway_id},
+                    {"$inc": {"participants_count": 1}}
+                )
+                
+                logger.info(f"Added participant: {chat_msg.username} to giveaway {giveaway_id}")
+                return {"message": "Participant added", "is_participant": True}
+        
+        return {"message": "Message processed", "is_participant": False}
+        
     except Exception as e:
-        logger.error(f"Error stopping giveaway: {e}")
-        raise HTTPException(status_code=500, detail="Failed to stop giveaway")
+        logger.error(f"Error processing chat message: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process chat message")
 
 # Get participants
 @app.get("/api/giveaway/{giveaway_id}/participants")
@@ -158,44 +213,11 @@ async def get_participants(giveaway_id: str):
         participants = list(participants_collection.find(
             {"giveaway_id": giveaway_id},
             {"_id": 0}
-        ))
+        ).sort("joined_at", 1))
         return participants
     except Exception as e:
         logger.error(f"Error getting participants: {e}")
         raise HTTPException(status_code=500, detail="Failed to get participants")
-
-# Add participant
-@app.post("/api/giveaway/{giveaway_id}/participant")
-async def add_participant(giveaway_id: str, username: str):
-    try:
-        # Check if participant already exists
-        existing = participants_collection.find_one({
-            "giveaway_id": giveaway_id,
-            "username": username
-        })
-        
-        if existing:
-            return {"message": "Participant already registered"}
-        
-        participant = {
-            "id": str(uuid.uuid4()),
-            "username": username,
-            "joined_at": datetime.now().isoformat(),
-            "giveaway_id": giveaway_id
-        }
-        
-        participants_collection.insert_one(participant)
-        
-        # Update participants count
-        giveaways_collection.update_one(
-            {"id": giveaway_id},
-            {"$inc": {"participants_count": 1}}
-        )
-        
-        return {"message": "Participant added"}
-    except Exception as e:
-        logger.error(f"Error adding participant: {e}")
-        raise HTTPException(status_code=500, detail="Failed to add participant")
 
 # Select winner
 @app.post("/api/giveaway/{giveaway_id}/winner")
@@ -214,7 +236,7 @@ async def select_winner(giveaway_id: str):
         # Update giveaway with winner
         giveaways_collection.update_one(
             {"id": giveaway_id},
-            {"$set": {"winner": winner, "is_active": False}}
+            {"$set": {"winner": winner}}
         )
         
         # Add winner announcement to chat
@@ -229,10 +251,29 @@ async def select_winner(giveaway_id: str):
         }
         chat_messages_collection.insert_one(winner_msg)
         
+        logger.info(f"Selected winner: {winner} for giveaway {giveaway_id}")
         return {"winner": winner}
     except Exception as e:
         logger.error(f"Error selecting winner: {e}")
         raise HTTPException(status_code=500, detail="Failed to select winner")
+
+# Stop giveaway
+@app.post("/api/giveaway/{giveaway_id}/stop")
+async def stop_giveaway(giveaway_id: str):
+    try:
+        result = giveaways_collection.update_one(
+            {"id": giveaway_id},
+            {"$set": {"is_active": False}}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Giveaway not found")
+        
+        logger.info(f"Stopped giveaway: {giveaway_id}")
+        return {"message": "Giveaway stopped"}
+    except Exception as e:
+        logger.error(f"Error stopping giveaway: {e}")
+        raise HTTPException(status_code=500, detail="Failed to stop giveaway")
 
 # Get chat messages
 @app.get("/api/giveaway/{giveaway_id}/chat")
@@ -250,59 +291,51 @@ async def get_chat_messages(giveaway_id: str, limit: int = 50):
         logger.error(f"Error getting chat messages: {e}")
         raise HTTPException(status_code=500, detail="Failed to get chat messages")
 
-# Simulate chat message (for demo)
-@app.post("/api/simulate/chat")
-async def simulate_chat_message(giveaway_id: str = None, keyword: str = "!участвую"):
+# Clear participants
+@app.delete("/api/giveaway/{giveaway_id}/participants")
+async def clear_participants(giveaway_id: str):
     try:
-        if not giveaway_id:
-            # Get active giveaway
-            giveaway = giveaways_collection.find_one({"is_active": True})
-            if not giveaway:
-                raise HTTPException(status_code=400, detail="No active giveaway")
-            giveaway_id = giveaway["id"]
+        participants_collection.delete_many({"giveaway_id": giveaway_id})
+        giveaways_collection.update_one(
+            {"id": giveaway_id},
+            {"$set": {"participants_count": 0, "winner": None}}
+        )
         
-        random_user = random.choice(DEMO_USERS)
-        is_keyword_message = random.random() < 0.3  # 30% chance
-        message = keyword if is_keyword_message else random.choice(DEMO_MESSAGES)
+        logger.info(f"Cleared participants for giveaway: {giveaway_id}")
+        return {"message": "Participants cleared"}
+    except Exception as e:
+        logger.error(f"Error clearing participants: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear participants")
+
+# Get channel statistics
+@app.get("/api/channel/{channel_name}/stats")
+async def get_channel_stats(channel_name: str):
+    try:
+        # Get active giveaway for channel
+        giveaway = giveaways_collection.find_one({
+            "channel_name": channel_name.lower(),
+            "is_active": True
+        })
         
-        chat_msg = {
-            "id": str(uuid.uuid4()),
-            "username": random_user,
-            "message": message,
-            "timestamp": datetime.now().isoformat(),
-            "is_keyword": is_keyword_message,
-            "is_system": False,
-            "giveaway_id": giveaway_id
+        if not giveaway:
+            return {"message": "No active giveaway for this channel"}
+        
+        # Get stats
+        participants_count = participants_collection.count_documents({"giveaway_id": giveaway["id"]})
+        messages_count = chat_messages_collection.count_documents({"giveaway_id": giveaway["id"]})
+        
+        return {
+            "giveaway_id": giveaway["id"],
+            "channel_name": channel_name,
+            "participants_count": participants_count,
+            "messages_count": messages_count,
+            "keyword": giveaway["keyword"],
+            "winner": giveaway.get("winner")
         }
         
-        chat_messages_collection.insert_one(chat_msg)
-        
-        # Add participant if keyword message
-        if is_keyword_message:
-            existing = participants_collection.find_one({
-                "giveaway_id": giveaway_id,
-                "username": random_user
-            })
-            
-            if not existing:
-                participant = {
-                    "id": str(uuid.uuid4()),
-                    "username": random_user,
-                    "joined_at": datetime.now().isoformat(),
-                    "giveaway_id": giveaway_id
-                }
-                participants_collection.insert_one(participant)
-                
-                # Update count
-                giveaways_collection.update_one(
-                    {"id": giveaway_id},
-                    {"$inc": {"participants_count": 1}}
-                )
-        
-        return ChatMessage(**chat_msg)
     except Exception as e:
-        logger.error(f"Error simulating chat: {e}")
-        raise HTTPException(status_code=500, detail="Failed to simulate chat")
+        logger.error(f"Error getting channel stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get channel stats")
 
 # Clear all data (for testing)
 @app.delete("/api/clear-all")

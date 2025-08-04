@@ -4,59 +4,161 @@ import { Input } from './components/ui/input';
 import { Card } from './components/ui/card';
 import { Badge } from './components/ui/badge';
 import { Separator } from './components/ui/separator';
-import { Users, Trophy, Zap, Settings, Play, Square, Crown, Gift } from 'lucide-react';
+import { Users, Trophy, Zap, Settings, Play, Square, Crown, Gift, WifiOff, Wifi } from 'lucide-react';
 import './App.css';
-
-const DEMO_USERS = [
-  'StreamFan123', 'GamerPro', 'TwitchLover', 'ChatMaster', 'ViewerOne',
-  'KappaPride', 'EpicGamer', 'StreamSniper', 'ChatBot2023', 'ProViewer',
-  'TwitchNinja', 'StreamKing', 'ViewerMaster', 'ChatLegend', 'GameOn',
-  'StreamHero', 'TwitchStar', 'ViewerPro', 'ChatChampion', 'StreamFan'
-];
-
-const DEMO_MESSAGES = [
-  'Привет стрим!', 'Классная игра!', 'Первый!', 'Как дела?', 
-  'Крутой контент!', 'Удачи в игре!', 'Смотрю каждый день!',
-  'Лучший стример!', 'Интересно!', 'Продолжай в том же духе!'
-];
 
 function App() {
   const [streamUrl, setStreamUrl] = useState('');
   const [keyword, setKeyword] = useState('!участвую');
   const [participants, setParticipants] = useState([]);
   const [chatMessages, setChatMessages] = useState([]);
-  const [isListening, setIsListening] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [winner, setWinner] = useState(null);
   const [showWinnerAnimation, setShowWinnerAnimation] = useState(false);
+  const [channelName, setChannelName] = useState('');
   const chatEndRef = useRef(null);
+  const wsRef = useRef(null);
 
-  // Симуляция чата
-  useEffect(() => {
-    if (isListening) {
-      const interval = setInterval(() => {
-        const randomUser = DEMO_USERS[Math.floor(Math.random() * DEMO_USERS.length)];
-        const isKeywordMessage = Math.random() < 0.3; // 30% шанс ключевого слова
-        const message = isKeywordMessage ? keyword : DEMO_MESSAGES[Math.floor(Math.random() * DEMO_MESSAGES.length)];
-        
-        const newMessage = {
-          id: Date.now(),
-          username: randomUser,
-          message: message,
-          timestamp: new Date().toLocaleTimeString(),
-          isKeyword: isKeywordMessage
-        };
-
-        setChatMessages(prev => [...prev.slice(-50), newMessage]);
-        
-        // Добавляем участника если написал ключевое слово
-        if (isKeywordMessage && !participants.includes(randomUser)) {
-          setParticipants(prev => [...prev, randomUser]);
+  // Извлечение названия канала из URL
+  const extractChannelName = (url) => {
+    try {
+      // Поддерживаем различные форматы URL
+      const patterns = [
+        /twitch\.tv\/(\w+)$/,
+        /twitch\.tv\/(\w+)\/?,
+        /www\.twitch\.tv\/(\w+)$/,
+        /www\.twitch\.tv\/(\w+)\/?/,
+      ];
+      
+      for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) {
+          return match[1].toLowerCase();
         }
-      }, Math.random() * 3000 + 1000); // Сообщения каждые 1-4 секунды
-
-      return () => clearInterval(interval);
+      }
+      
+      // Если это просто название канала
+      if (/^\w+$/.test(url)) {
+        return url.toLowerCase();
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error extracting channel name:', error);
+      return null;
     }
-  }, [isListening, keyword, participants]);
+  };
+
+  // Подключение к Twitch IRC через WebSocket
+  const connectToTwitchChat = (channelName) => {
+    try {
+      setConnectionStatus('connecting');
+      setChatMessages([{
+        id: 'system-' + Date.now(),
+        username: 'TwitchBot',
+        message: `🔌 Подключаемся к каналу ${channelName}...`,
+        timestamp: new Date().toLocaleTimeString(),
+        isSystem: true
+      }]);
+
+      // Создаем WebSocket соединение с Twitch IRC
+      const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('WebSocket connected to Twitch IRC');
+        
+        // Отправляем команды для подключения к IRC
+        ws.send('PASS SCHMOOPIIE'); // Анонимное подключение
+        ws.send('NICK justinfan12345'); // Анонимный пользователь
+        ws.send(`JOIN #${channelName}`); // Присоединяемся к каналу
+        
+        setConnectionStatus('connected');
+        setIsConnected(true);
+        
+        setChatMessages(prev => [...prev, {
+          id: 'system-' + Date.now(),
+          username: 'TwitchBot',
+          message: `✅ Подключено к каналу ${channelName}! Ожидаем сообщения...`,
+          timestamp: new Date().toLocaleTimeString(),
+          isSystem: true
+        }]);
+      };
+
+      ws.onmessage = (event) => {
+        const message = event.data.trim();
+        console.log('Twitch IRC message:', message);
+        
+        // Обработка PING/PONG для поддержания соединения
+        if (message.startsWith('PING')) {
+          ws.send('PONG :tmi.twitch.tv');
+          return;
+        }
+        
+        // Парсинг сообщений чата
+        const chatMatch = message.match(/:(\w+)!\w+@\w+\.tmi\.twitch\.tv PRIVMSG #\w+ :(.+)/);
+        if (chatMatch) {
+          const [, username, messageText] = chatMatch;
+          const isKeywordMessage = messageText.toLowerCase().includes(keyword.toLowerCase());
+          
+          const newMessage = {
+            id: 'real-' + Date.now() + '-' + Math.random(),
+            username: username,
+            message: messageText,
+            timestamp: new Date().toLocaleTimeString(),
+            isKeyword: isKeywordMessage,
+            isSystem: false
+          };
+
+          setChatMessages(prev => [...prev.slice(-49), newMessage]);
+          
+          // Добавляем участника если написал ключевое слово
+          if (isKeywordMessage && !participants.includes(username)) {
+            setParticipants(prev => [...prev, username]);
+            
+            // Добавляем уведомление о новом участнике
+            setChatMessages(prev => [...prev, {
+              id: 'participant-' + Date.now(),
+              username: 'TwitchBot',
+              message: `🎯 ${username} присоединился к розыгрышу!`,
+              timestamp: new Date().toLocaleTimeString(),
+              isSystem: true
+            }]);
+          }
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setConnectionStatus('error');
+        setChatMessages(prev => [...prev, {
+          id: 'error-' + Date.now(),
+          username: 'TwitchBot',
+          message: '❌ Ошибка подключения к чату Twitch',
+          timestamp: new Date().toLocaleTimeString(),
+          isSystem: true
+        }]);
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        setConnectionStatus('disconnected');
+        setIsConnected(false);
+        setChatMessages(prev => [...prev, {
+          id: 'disconnect-' + Date.now(),
+          username: 'TwitchBot',
+          message: '🔌 Отключено от чата',
+          timestamp: new Date().toLocaleTimeString(),
+          isSystem: true
+        }]);
+      };
+
+    } catch (error) {
+      console.error('Error connecting to Twitch:', error);
+      setConnectionStatus('error');
+    }
+  };
 
   // Автоскролл чата
   useEffect(() => {
@@ -65,21 +167,34 @@ function App() {
 
   const startListening = () => {
     if (!streamUrl.trim()) {
-      alert('Введите ссылку на стрим!');
+      alert('Введите ссылку на стрим или название канала!');
       return;
     }
-    setIsListening(true);
+
+    const channel = extractChannelName(streamUrl.trim());
+    if (!channel) {
+      alert('Неверный формат ссылки! Примеры:\n- https://twitch.tv/channelname\n- https://www.twitch.tv/channelname\n- channelname');
+      return;
+    }
+
+    setChannelName(channel);
+    connectToTwitchChat(channel);
+    
     setChatMessages([{
-      id: 0,
+      id: 'start-' + Date.now(),
       username: 'TwitchBot',
-      message: `🎉 Розыгрыш начался! Пишите "${keyword}" для участия!`,
+      message: `🎉 Розыгрыш начался! Пишите "${keyword}" в чате для участия!`,
       timestamp: new Date().toLocaleTimeString(),
       isSystem: true
     }]);
   };
 
   const stopListening = () => {
-    setIsListening(false);
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+    setConnectionStatus('disconnected');
+    setIsConnected(false);
   };
 
   const selectWinner = () => {
@@ -101,7 +216,7 @@ function App() {
 
     // Добавляем сообщение о победителе в чат
     setChatMessages(prev => [...prev, {
-      id: Date.now(),
+      id: 'winner-' + Date.now(),
       username: 'TwitchBot',
       message: `🏆 Поздравляем ${selectedWinner}! Вы выиграли!`,
       timestamp: new Date().toLocaleTimeString(),
@@ -112,6 +227,33 @@ function App() {
   const clearParticipants = () => {
     setParticipants([]);
     setWinner(null);
+  };
+
+  const getConnectionStatusColor = () => {
+    switch (connectionStatus) {
+      case 'connected': return 'text-green-400';
+      case 'connecting': return 'text-yellow-400';
+      case 'error': return 'text-red-400';
+      default: return 'text-gray-400';
+    }
+  };
+
+  const getConnectionStatusText = () => {
+    switch (connectionStatus) {
+      case 'connected': return 'Подключено к чату';
+      case 'connecting': return 'Подключение...';
+      case 'error': return 'Ошибка подключения';
+      default: return 'Не подключено';
+    }
+  };
+
+  const getConnectionStatusIcon = () => {
+    switch (connectionStatus) {
+      case 'connected': return <Wifi className="w-4 h-4" />;
+      case 'connecting': return <Zap className="w-4 h-4 animate-pulse" />;
+      case 'error': return <WifiOff className="w-4 h-4" />;
+      default: return <WifiOff className="w-4 h-4" />;
+    }
   };
 
   return (
@@ -136,7 +278,7 @@ function App() {
             <h1 className="text-4xl font-bold text-white">Twitch Розыгрыш</h1>
             <Trophy className="w-12 h-12 text-yellow-400" />
           </div>
-          <p className="text-gray-300 text-lg">Автоматический розыгрыш призов для вашего стрима</p>
+          <p className="text-gray-300 text-lg">Реальные розыгрыши призов для вашего стрима</p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -151,19 +293,22 @@ function App() {
               <div className="space-y-4">
                 <div>
                   <label className="text-sm font-medium text-gray-300 block mb-2">
-                    Ссылка на стрим
+                    Ссылка на стрим или название канала
                   </label>
                   <Input
                     value={streamUrl}
                     onChange={(e) => setStreamUrl(e.target.value)}
-                    placeholder="https://twitch.tv/your_channel"
+                    placeholder="https://twitch.tv/channelname или channelname"
                     className="bg-gray-800 border-gray-600 text-white placeholder-gray-400"
                   />
+                  <div className="text-xs text-gray-500 mt-1">
+                    Примеры: ninja, shroud, https://twitch.tv/ninja
+                  </div>
                 </div>
 
                 <div>
                   <label className="text-sm font-medium text-gray-300 block mb-2">
-                    Ключевое слово
+                    Ключевое слово для участия
                   </label>
                   <Input
                     value={keyword}
@@ -175,14 +320,26 @@ function App() {
 
                 <Separator className="bg-gray-600" />
 
+                {/* Connection Status */}
+                <div className={`flex items-center gap-2 ${getConnectionStatusColor()}`}>
+                  {getConnectionStatusIcon()}
+                  <span className="text-sm">{getConnectionStatusText()}</span>
+                  {channelName && (
+                    <Badge variant="outline" className="text-xs border-purple-500 text-purple-400">
+                      #{channelName}
+                    </Badge>
+                  )}
+                </div>
+
                 <div className="flex gap-2">
-                  {!isListening ? (
+                  {!isConnected ? (
                     <Button
                       onClick={startListening}
                       className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                      disabled={connectionStatus === 'connecting'}
                     >
                       <Play className="w-4 h-4 mr-2" />
-                      Начать
+                      {connectionStatus === 'connecting' ? 'Подключение...' : 'Начать'}
                     </Button>
                   ) : (
                     <Button
@@ -194,13 +351,6 @@ function App() {
                     </Button>
                   )}
                 </div>
-
-                {isListening && (
-                  <div className="flex items-center gap-2 text-green-400 animate-pulse">
-                    <Zap className="w-4 h-4" />
-                    <span className="text-sm">Слушаем чат...</span>
-                  </div>
-                )}
               </div>
             </Card>
 
@@ -221,7 +371,7 @@ function App() {
                 </Button>
               </div>
 
-              <div className="max-h-48 overflow-y-auto space-y-2">
+              <div className="max-h-48 overflow-y-auto space-y-2 custom-scrollbar">
                 {participants.map((participant, index) => (
                   <div
                     key={index}
@@ -233,6 +383,13 @@ function App() {
                     <span className="text-white">{participant}</span>
                   </div>
                 ))}
+                {participants.length === 0 && (
+                  <div className="text-center py-4 text-gray-500">
+                    <Users className="w-8 h-8 mx-auto mb-2" />
+                    <p className="text-sm">Участников пока нет</p>
+                    <p className="text-xs">Ждем сообщения с ключевым словом</p>
+                  </div>
+                )}
               </div>
 
               {participants.length > 0 && (
@@ -241,7 +398,7 @@ function App() {
                   className="w-full mt-4 bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-white font-bold"
                 >
                   <Trophy className="w-4 h-4 mr-2" />
-                  Выбрать победителя!
+                  Выбрать победителя! ({participants.length})
                 </Button>
               )}
 
@@ -260,12 +417,24 @@ function App() {
           {/* Chat */}
           <div className="lg:col-span-2">
             <Card className="bg-gray-900 border-gray-700 p-6 h-[600px] flex flex-col">
-              <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                💬 Чат Twitch
-                {isListening && (
-                  <Badge className="bg-green-600 text-white animate-pulse">LIVE</Badge>
-                )}
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  💬 Чат Twitch
+                  {isConnected && (
+                    <Badge className="bg-green-600 text-white animate-pulse">LIVE</Badge>
+                  )}
+                  {channelName && (
+                    <Badge variant="outline" className="border-purple-500 text-purple-400">
+                      #{channelName}
+                    </Badge>
+                  )}
+                </h2>
+                
+                <div className={`flex items-center gap-2 ${getConnectionStatusColor()}`}>
+                  {getConnectionStatusIcon()}
+                  <span className="text-sm">{getConnectionStatusText()}</span>
+                </div>
+              </div>
 
               <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                 {chatMessages.map((msg) => (
@@ -290,7 +459,7 @@ function App() {
                       </Badge>
                       <span className="text-xs text-gray-500">{msg.timestamp}</span>
                       {msg.isKeyword && (
-                        <Badge className="bg-purple-600 text-white text-xs">
+                        <Badge className="bg-purple-600 text-white text-xs animate-pulse">
                           Участник!
                         </Badge>
                       )}
@@ -305,10 +474,16 @@ function App() {
                 <div ref={chatEndRef} />
               </div>
 
-              {!isListening && (
+              {!isConnected && (
                 <div className="text-center py-8 text-gray-500">
-                  <div className="text-4xl mb-4">💭</div>
-                  <p>Введите ссылку на стрим и нажмите "Начать" для подключения к чату</p>
+                  <div className="text-4xl mb-4">🔌</div>
+                  <p className="text-lg mb-2">Подключите чат для начала розыгрыша</p>
+                  <p className="text-sm">Введите ссылку на стрим и нажмите "Начать"</p>
+                  <div className="mt-4 text-xs text-gray-600">
+                    <p>Поддерживаемые форматы:</p>
+                    <p>• https://twitch.tv/channelname</p>
+                    <p>• channelname</p>
+                  </div>
                 </div>
               )}
             </Card>
