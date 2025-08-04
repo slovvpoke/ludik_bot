@@ -178,18 +178,27 @@ class TwitchGiveawayAPITester:
         )
         return success
 
-    def test_add_participant_manually(self):
-        """Test manually adding a participant"""
+    def test_clear_participants(self):
+        """Test clearing participants"""
         if not self.giveaway_id:
-            print("❌ No giveaway ID available for add participant test")
+            print("❌ No giveaway ID available for clear participants test")
             return False
             
         success, response = self.run_test(
-            "Add Participant Manually",
-            "POST",
-            f"api/giveaway/{self.giveaway_id}/participant",
-            200,
-            params={"username": "TestUser123"}
+            "Clear Participants",
+            "DELETE",
+            f"api/giveaway/{self.giveaway_id}/participants",
+            200
+        )
+        return success
+
+    def test_channel_stats(self):
+        """Test getting channel statistics"""
+        success, response = self.run_test(
+            "Get Channel Stats",
+            "GET",
+            "api/channel/test_channel/stats",
+            200
         )
         return success
 
